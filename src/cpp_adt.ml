@@ -44,14 +44,18 @@ let pp_arg (out:out_channel) (f:t_field) : unit =
   else Printf.fprintf out "%s %s" f.f_type f.f_name
 
 let pp_subclass_def (cl:string) (out:out_channel) (c:t_case) : unit =
+  let aux out = function
+    | [] -> ()
+    | (_::_) as lst -> Printf.fprintf out ":%a" (pp_list ", " pp_init) lst
+  in
   Printf.fprintf out
     "class %s::%s : public Abstract%s {
     public:
-        %s(%a):%a{};
+        %s(%a)%a{};
         void accept(Visitor &v) const { v.visit%s(*this); }
         Kind getKind() const { return Kind::%s; }
         %a
-};" cl c.c_name cl c.c_name (pp_list ", " pp_arg) c.c_fields (pp_list "," pp_init)
+};" cl c.c_name cl c.c_name (pp_list "," pp_arg) c.c_fields  aux
     c.c_fields c.c_name c.c_name (pp_list "\n        " pp_field) c.c_fields
 
 let pp_constructor (cl:string) (out:out_channel) (c:t_case) : unit =
