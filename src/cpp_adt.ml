@@ -13,143 +13,114 @@ type adt = {
   cases: t_case list;
 }
 
-let pp_list sep pp out lst =
-  let rec aux first = function
-    | [] -> ()
-    | hd::tl -> 
-    begin
-      (if first then
-        Printf.fprintf out "%a" pp hd
-      else
-        Printf.fprintf out "%s%a" sep pp hd);
-      aux false tl
-    end
-  in
-  aux true lst
-
-let pp_enum (out:out_channel) (c:t_case) : unit =
-  Printf.fprintf out "%s" c.c_name
-
-let pp_subclass_decl (out:out_channel) (c:t_case) : unit =
-  Printf.fprintf out "class %s;" c.c_name
-
-let pp_field (out:out_channel) (f:t_field) : unit =
-  Printf.fprintf out "const %s %s;" f.f_type f.f_name
-
-let pp_init (out:out_channel) (f:t_field) : unit =
-  Printf.fprintf out "%s{%s}" f.f_name f.f_name
-
-let pp_arg (out:out_channel) (f:t_field) : unit =
-  if f.f_by_ref then Printf.fprintf out "const %s &%s" f.f_type f.f_name
-  else Printf.fprintf out "%s %s" f.f_type f.f_name
-
-let pp_subclass_def (cl:string) (out:out_channel) (c:t_case) : unit =
-  let aux out = function
-    | [] -> ()
-    | (_::_) as lst -> Printf.fprintf out ":%a" (pp_list ", " pp_init) lst
-  in
-  Printf.fprintf out
-    "class %s::%s : public Abstract%s {
-    public:
-        %s(%a)%a{};
-        void accept(Visitor &v) const { v.visit%s(*this); }
-        Kind getKind() const { return Kind::%s; }
-        %a
-};" cl c.c_name cl c.c_name (pp_list "," pp_arg) c.c_fields  aux
-    c.c_fields c.c_name c.c_name (pp_list "\n        " pp_field) c.c_fields
-
-let pp_constructor (cl:string) (out:out_channel) (c:t_case) : unit =
-  Printf.fprintf out "%s(const %s &e);" cl c.c_name
-
-let pp_helper_decl (cl:string) (out:out_channel) (c:t_case) : unit =
-  Printf.fprintf out "static %s make%s(%a);"
-    cl c.c_name (pp_list ", " pp_arg) c.c_fields
-
-let pp_cast (out:out_channel) (c:t_case) : unit =
-  Printf.fprintf out "const %s& to%s() const;" c.c_name c.c_name
-
-let pp_visitor_method (out:out_channel) (c:t_case) : unit =
-  Printf.fprintf out "virtual void visit%s(const %s &e) = 0;" c.c_name c.c_name
-
-let print_header (out:out_channel) (adt:adt) : unit =
-  Printf.fprintf out
-    "#ifndef %s_H
-#define %s_H
+let header_template : Mustache.t =
+  Mustache.of_string 
+    "#ifndef {{caps_name}}_H
+#define {{caps_name}}_H
 
 #include <memory>
+#include <cassert>
 
-class %s {
-public:
-    enum class Kind { %a };
-    %a
-    %a
-    Kind getKind() const;
-    %a
-    class Visitor {
-        public:
-        %a
-    };
-    void accept(Visitor &v) const;
-    %a
+class {{name}} {
+    public:
+        enum class Kind { {{#cases}}{{#c_comma}}, {{/c_comma}}{{c_name}}{{/cases}} };
+    
+        Kind getKind() const;
+    
+        {{#cases}}
+        class {{c_name}};
+        {{/cases}}
+    
+        {{#cases}}
+        {{name}}(const {{c_name}} &e);
+        {{/cases}}
+    
+        {{#cases}}
+        const {{c_name}}& to{{c_name}}() const;
+        {{/cases}}
+    
+        {{#cases}}
+        static {{name}} make{{c_name}}({{#fields}}{{#f_comma}}, {{/f_comma}}{{{f_type2}}} {{f_name}}{{/fields}});
+        {{/cases}}
+    
+        class Visitor {
+            public:
+                {{#cases}}
+                virtual void visit{{c_name}}(const {{c_name}} &e) = 0;
+                {{/cases}}
+        };
+        void accept(Visitor &v) const;
 
-private:
-    class Abstract%s {
-       public:
-       virtual Kind getKind() const = 0;
-       virtual void accept(Visitor &v) const = 0;
-    };
-    std::shared_ptr<Abstract%s> ptr;
+        inline bool operator==(const {{name}} &other) const;
+        
+    
+    private:
+        class Abstract{{name}} {
+            public:
+                virtual Kind getKind() const = 0;
+                virtual void accept(Visitor &v) const = 0;
+        };
+        std::shared_ptr<Abstract{{name}}> ptr;
 };
+{{#cases}}
 
-%a
+class {{name}}::{{c_name}} : public Abstract{{name}} {
+    public:
+        {{c_name}}({{#fields}}{{#f_comma}}, {{/f_comma}}{{{f_type2}}} {{f_name}}{{/fields}})
+            :{{#fields}}{{#f_comma}}, {{/f_comma}}{{f_name}}{ {{f_name}} }{{/fields}}
+        {};
+        void accept(Visitor &v) const { v.visit{{c_name}}( *this ); }
+        Kind getKind() const { return Kind::{{c_name}}; }
+        bool operator==(const {{c_name}} &other) const {
+        {{#fields}}{{#f_first}}    return {{/f_first}}{{^f_first}} && {{/f_first}}{{f_name}} == other.{{f_name}}{{/fields}};
+        };
+        {{#fields}}
+        const {{f_type}} {{f_name}};
+        {{/fields}}
+};
+{{/cases}}
 
 #endif
 "
-    (String.capitalize_ascii adt.name)
-    (String.capitalize_ascii adt.name)
-    adt.name
-    (pp_list ", " pp_enum) adt.cases
-    (pp_list "\n    " pp_subclass_decl) adt.cases
-    (pp_list "\n    " (pp_constructor adt.name)) adt.cases
-    (pp_list "\n    " pp_cast) adt.cases
-    (pp_list "\n        " pp_visitor_method) adt.cases
-    (pp_list "\n    " (pp_helper_decl adt.name)) adt.cases
-    adt.name
-    adt.name
-    (pp_list "\n" (pp_subclass_def adt.name)) adt.cases
 
-let pp_cast_def (cl:string) (out:out_channel) (c:t_case) : unit =
-Printf.fprintf out "const %s::%s& %s::to%s() const{
-  assert(getKind() == Kind::%s);
-  return static_cast<%s&>(*ptr);
-}" cl c.c_name cl c.c_name c.c_name c.c_name
-
-let pp_constructor_def (cl:string) (out:out_channel) (c:t_case) : unit =
-  Printf.fprintf out "%s::%s(const %s &e){ ptr = std::make_shared<%s>(e); };" cl cl c.c_name c.c_name
-
-let pp_helper_def (cl:string) (out:out_channel) (c:t_case) : unit =
-  let aux out f = Printf.fprintf out "%s" f.f_name in
-  Printf.fprintf out "%s %s::make%s(%a){ return %s(%s(%a)); };"
-    cl cl c.c_name (pp_list "," pp_arg) c.c_fields cl c.c_name
-    (pp_list "," aux) c.c_fields
-
-let print_implem (out:out_channel) (adt:adt) : unit =
-  Printf.fprintf out
+let implem_template : Mustache.t =
+  Mustache.of_string 
     "#include <cassert>
-#include \"%s.h\"
+#include \"{{filename}}.h\"
 
-%s::Kind %s::getKind() const { return ptr->getKind(); };
-void %s::accept(Visitor &v) const { ptr->accept(v); };
-%a
-%a
-%a"
-    adt.filename
-    adt.name
-    adt.name
-    adt.name
-    (pp_list "\n" (pp_cast_def adt.name)) adt.cases
-    (pp_list "\n" (pp_constructor_def adt.name)) adt.cases
-    (pp_list "\n" (pp_helper_def adt.name)) adt.cases
+{{name}}::Kind {{name}}::getKind() const { return ptr->getKind(); };
+
+void {{name}}::accept(Visitor &v) const { ptr->accept(v); };
+
+{{#cases}}
+const {{name}}::{{c_name}}& {{name}}::to{{c_name}}() const {
+  assert(getKind() == Kind::{{c_name}});
+  return static_cast<{{c_name}}&>(*ptr);
+}
+{{/cases}}
+
+{{#cases}}
+{{name}}::{{name}}(const {{c_name}} &e){ ptr = std::make_shared<{{c_name}}>(e); };
+{{/cases}}
+
+{{#cases}}
+{{name}} {{name}}::make{{c_name}}({{#fields}}{{#f_comma}}, {{/f_comma}}{{{f_type2}}} {{f_name}}{{/fields}}){
+  return {{name}}({{c_name}}({{#fields}}{{#f_comma}},{{/f_comma}}{{f_name}}{{/fields}}));
+};
+{{/cases}}
+
+bool {{name}}::operator==(const {{name}} &other) const {
+    if(getKind() != other.getKind())
+        return false;
+
+    switch(getKind()){
+    {{#cases}}
+        case Kind::{{c_name}}:
+            return to{{c_name}}() == other.to{{c_name}}();
+    {{/cases}}
+    }
+    assert(false); // unreachable
+}"
 
 let ex = {
   filename="term";
@@ -160,9 +131,32 @@ let ex = {
     { c_name="App"; c_fields=[{f_name="fun";f_type="Term"; f_by_ref=true};{f_name="arg";f_type="Term"; f_by_ref=true}] }
   ];
 }
+let to_json (adt:adt) =
+  let cases =
+    List.mapi (fun i case -> 
+        let fields = List.mapi (fun i fd ->
+            `O [ "f_name", `String fd.f_name
+               ; "f_type", `String fd.f_type
+               ; "f_type2", `String
+                   (if fd.f_by_ref then ("const " ^ fd.f_type ^ "&") else fd.f_type)
+               ; "f_first", `Bool (i == 0)
+               ; "f_comma", `Bool (i <> 0) ]
+          ) case.c_fields in
+        `O [ "c_name",`String case.c_name
+           ; "c_comma", `Bool (i <> 0)
+           ; "fields", `A fields
+           ]
+      ) adt.cases
+  in
+  `O [ "name", `String adt.name 
+     ; "caps_name", `String (String.capitalize_ascii adt.name) 
+     ; "filename", `String adt.filename 
+     ; "cases", `A cases
+     ]
 
 let _ =
-  let out_h = open_out (ex.filename ^ ".h") in
-  let out_cpp = open_out (ex.filename ^ ".cpp") in
-  print_header out_h ex;
-  print_implem out_cpp ex
+  let out_h = Format.formatter_of_out_channel (open_out (ex.filename ^ ".h")) in
+  let out_cpp = Format.formatter_of_out_channel (open_out (ex.filename ^ ".cpp")) in
+  let json = to_json ex in
+  Mustache.render_fmt out_h header_template json;
+  Mustache.render_fmt out_cpp implem_template json
